@@ -1,0 +1,23 @@
+{
+  "name": "bezier-cursor-tail",
+  "version": "0.1.0",
+  "description": "Dependency-free bezier cursor tail and handwriting stroke model extracted from Maliang Deck.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/bezier-cursor-tail.js"
+  },
+  "scripts": {
+    "serve": "python3 -m http.server 5173 --bind 127.0.0.1",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "bezier",
+    "cursor",
+    "tail",
+    "handwriting",
+    "canvas",
+    "svg",
+    "pointer"
+  ]
+}

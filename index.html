@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bezier Cursor Tail Demo</title>
+    <link rel="stylesheet" href="./demo/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="toolbar">
+        <div class="brand">
+          <strong>Bezier Cursor Tail</strong>
+          <span>Variable-width handwriting demo</span>
+        </div>
+
+        <div class="tool-group" aria-label="Drawing tools">
+          <button type="button" data-tool="pen" aria-pressed="true">Brush</button>
+          <button type="button" data-tool="eraser" aria-pressed="false">Pixel Eraser</button>
+          <button type="button" data-tool="stroke-eraser" aria-pressed="false">Curve Eraser</button>
+        </div>
+
+        <label>
+          Color
+          <input data-role="color" type="color" value="#111827">
+        </label>
+
+        <label>
+          Size
+          <input data-role="size" type="range" min="1" max="28" value="5">
+          <span data-role="size-value">5</span>
+        </label>
+
+        <label class="switch">
+          Tail
+          <input data-role="tail-toggle" type="checkbox" checked>
+        </label>
+
+        <span class="spacer"></span>
+
+        <div class="tool-group" aria-label="History">
+          <button type="button" data-role="undo">Undo</button>
+          <button type="button" data-role="redo">Redo</button>
+          <button type="button" data-role="clear">Clear</button>
+        </div>
+      </header>
+
+      <section class="surface" aria-label="Drawing surface">
+        <div class="paper">
+          <canvas data-role="canvas"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./demo/app.js"></script>
+  </body>
+</html>
