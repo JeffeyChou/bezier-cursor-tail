@@ -14,6 +14,8 @@ Open `http://127.0.0.1:5173/`.
 
 The demo uses ES modules, so serve it over HTTP instead of opening `index.html` directly from the filesystem.
 
+### [Live Demo](https://jeffeychou.github.io/bezier-cursor-tail/)
+
 ## Publish The Demo With GitHub Pages
 
 This repository includes a GitHub Actions workflow at `.github/workflows/pages.yml`. It stages the static demo files into `_site` and deploys them to GitHub Pages whenever `main` is updated.
