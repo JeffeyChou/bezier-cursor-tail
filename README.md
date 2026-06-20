@@ -14,6 +14,26 @@ Open `http://127.0.0.1:5173/`.
 
 The demo uses ES modules, so serve it over HTTP instead of opening `index.html` directly from the filesystem.
 
+## Publish The Demo With GitHub Pages
+
+This repository includes a GitHub Actions workflow at `.github/workflows/pages.yml`. It stages the static demo files into `_site` and deploys them to GitHub Pages whenever `main` is updated.
+
+To enable the live demo:
+
+1. Push this repository to GitHub.
+2. Open the repository on GitHub.
+3. Go to `Settings` -> `Pages`.
+4. Under `Build and deployment`, set `Source` to `GitHub Actions`.
+5. Push to `main`, or run `Deploy demo to GitHub Pages` manually from the `Actions` tab.
+
+For `https://github.com/JeffeyChou/bezier-cursor-tail`, the demo URL will be:
+
+```text
+https://jeffeychou.github.io/bezier-cursor-tail/
+```
+
+The first deployment may take a minute or two after the workflow succeeds.
+
 ## Use The Stroke Model
 
 ```js
