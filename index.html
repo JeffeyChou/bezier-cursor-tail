@@ -43,11 +43,18 @@
           <button type="button" data-role="redo">Redo</button>
           <button type="button" data-role="clear">Clear</button>
         </div>
+
+        <div class="tool-group" aria-label="File">
+          <button type="button" data-role="save">Save</button>
+          <button type="button" data-role="open">Open</button>
+          <input data-role="file" type="file" accept=".bcts" hidden>
+        </div>
       </header>
 
       <section class="surface" aria-label="Drawing surface">
         <div class="paper">
           <canvas data-role="canvas"></canvas>
+          <output class="storage-meter" data-role="storage" aria-live="polite"></output>
         </div>
       </section>
     </main>

@@ -1,6 +1,20 @@
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STYLE_ID = 'bezier-cursor-tail-style';
 
+/**
+ * The storage grids. Coordinates are captured at 1/10 px and brush values at
+ * 1/1000, and the stroke format stores exactly those integers. Decimal grids
+ * rather than folio's power of two: `q / 10` is the same double that
+ * `Math.round(x * 10) / 10` produced at capture, so replaying a decoded stroke
+ * reproduces the live one bit for bit.
+ */
+export const CAPTURE_GRID = 10;
+export const BRUSH_GRID = 1000;
+
+export function snapToGrid(value, grid) {
+  return Math.round(value * grid) / grid;
+}
+
 export const DEFAULT_STROKE_OPTIONS = Object.freeze({
   initialWidth: 0.4,
   endWidth: 0.1,
@@ -56,15 +70,15 @@ export function pointFromEvent(event, offsetElement) {
   if (offsetElement) {
     const rect = offsetElement.getBoundingClientRect();
     return {
-      x: Math.round((source.clientX - rect.left) * 10) / 10,
-      y: Math.round((source.clientY - rect.top) * 10) / 10,
+      x: snapToGrid(source.clientX - rect.left, CAPTURE_GRID),
+      y: snapToGrid(source.clientY - rect.top, CAPTURE_GRID),
       time,
     };
   }
 
   return {
-    x: Math.round(source.clientX * 10) / 10,
-    y: Math.round(source.clientY * 10) / 10,
+    x: snapToGrid(source.clientX, CAPTURE_GRID),
+    y: snapToGrid(source.clientY, CAPTURE_GRID),
     time,
   };
 }
@@ -87,6 +101,11 @@ export function createStrokeModel(options = {}) {
 
   return {
     points: [],
+    // The accepted input samples and the pointer-up position. `points` is a
+    // pure function of these plus the options below, so these are what a
+    // stroke saves; see `replayStroke`.
+    samples: [],
+    end: null,
     lastPoint: null,
     lastWidth: initialWidth,
     lastTime: 0,
@@ -284,6 +303,7 @@ export function insertStrokePoint(model, point) {
 
   if (len === 0) {
     addStrokePoint(model.points, { x: sample.x, y: sample.y, w: model.initialWidth });
+    model.samples.push(sample);
     model.lastPoint = sample;
     model.lastTime = sample.time;
     model.lastWidth = model.initialWidth;
@@ -333,6 +353,7 @@ export function insertStrokePoint(model, point) {
     addStrokePoint(model.points, generated[i]);
   }
 
+  model.samples.push(sample);
   model.lastPoint = sample;
   model.lastTime = sample.time;
   model.lastWidth = width;
@@ -355,7 +376,31 @@ export function finishStrokeModel(model, point) {
     addStrokePoint(model.points, generated[i]);
   }
 
+  model.end = {
+    x: point.x,
+    y: point.y,
+    time: Number.isFinite(point.time) ? point.time : model.lastTime,
+  };
   return true;
+}
+
+/**
+ * Rebuild a stroke model from its saved form: the samples, the end point, and
+ * the brush options it was drawn with.
+ *
+ * The sampling thresholds are forced to zero because every stored sample was
+ * already accepted once; replaying them through the same filter again would
+ * make the result depend on options the format does not need to store.
+ */
+export function replayStroke(stroke) {
+  const model = createStrokeModel({
+    ...stroke,
+    minSampleMs: 0,
+    minSampleDistance: 0,
+  });
+  for (const sample of stroke.samples || []) insertStrokePoint(model, sample);
+  if (stroke.end) finishStrokeModel(model, stroke.end);
+  return model;
 }
 
 export function drawStrokeDot(ctx, point, model) {
@@ -706,6 +751,7 @@ export class BezierCanvasBrush {
     this.history = [];
     this.redoStack = [];
     this.nextOperationId = 1;
+    this.onChange = typeof options.onChange === 'function' ? options.onChange : null;
     this.stroke = null;
     this.renderedIndex = 0;
     this.drawing = false;
@@ -765,12 +811,14 @@ export class BezierCanvasBrush {
     this.history = [];
     this.redoStack = [];
     this.clearCanvas();
+    this.changed();
   }
 
   undo() {
     if (this.drawing || !this.history.length) return false;
     this.redoStack.push(this.history.pop());
     this.redraw();
+    this.changed();
     return true;
   }
 
@@ -778,6 +826,54 @@ export class BezierCanvasBrush {
     if (this.drawing || !this.redoStack.length) return false;
     this.history.push(this.redoStack.pop());
     this.redraw();
+    this.changed();
+    return true;
+  }
+
+  changed() {
+    if (this.onChange) this.onChange(this);
+  }
+
+  /**
+   * The visible strokes, in paint order, as plain data. Whole-curve erasures
+   * are already applied and undo history is dropped: this is the drawing, not
+   * the session. Pass it to `encodeDrawing` from `./stroke-format.js`.
+   */
+  snapshot() {
+    return this.getRenderableOperations().map((operation) => ({
+      tool: operation.tool,
+      color: operation.color,
+      canvasWidth: operation.canvasWidth,
+      canvasHeight: operation.canvasHeight,
+      maxWidth: operation.maxWidth,
+      minWidth: operation.minWidth,
+      initialWidth: operation.initialWidth,
+      endWidth: operation.endWidth,
+      maxSpeed: operation.maxSpeed,
+      widthDiffStep: operation.widthDiffStep,
+      bezierStep: operation.bezierStep,
+      samples: operation.samples.map((sample) => ({ ...sample })),
+      end: operation.end ? { ...operation.end } : null,
+    }));
+  }
+
+  /** Replace the drawing with saved strokes, rebuilding their curves. */
+  load(strokes) {
+    if (this.drawing) return false;
+    this.history = [];
+    this.redoStack = [];
+    this.nextOperationId = 1;
+    for (const stroke of strokes || []) {
+      if (!stroke || !stroke.samples || !stroke.samples.length) continue;
+      this.history.push({
+        ...stroke,
+        id: this.nextOperationId,
+        points: replayStroke(stroke).points,
+      });
+      this.nextOperationId += 1;
+    }
+    this.redraw();
+    this.changed();
     return true;
   }
 
@@ -794,14 +890,22 @@ export class BezierCanvasBrush {
   createStroke() {
     const size = positiveNumber(this.options.size, DEFAULT_CANVAS_OPTIONS.size);
     const isEraser = this.options.tool === 'eraser';
+    // Snapped at capture, not at save, so the live stroke and its reload agree.
     return createStrokeModel({
-      maxWidth: isEraser ? Math.max(size * 2, 12) : size,
-      minWidth: isEraser ? Math.max(size, 6) : Math.max(0.8, size * 0.18),
+      maxWidth: snapToGrid(isEraser ? Math.max(size * 2, 12) : size, BRUSH_GRID),
+      minWidth: snapToGrid(isEraser ? Math.max(size, 6) : Math.max(0.8, size * 0.18), BRUSH_GRID),
       minSampleMs: this.options.minSampleMs,
       minSampleDistance: this.options.minSampleDistance,
       tool: this.options.tool,
       color: this.options.color,
     });
+  }
+
+  /** A pointer sample on the storage grid: 1/10 px, whole milliseconds. */
+  capturePoint(event) {
+    const point = pointFromEvent(event, this.canvas);
+    point.time = Math.round(point.time);
+    return point;
   }
 
   start(event) {
@@ -823,7 +927,7 @@ export class BezierCanvasBrush {
     this.drawing = true;
     this.stroke = this.createStroke();
     this.renderedIndex = 0;
-    insertStrokePoint(this.stroke, pointFromEvent(event, this.canvas));
+    insertStrokePoint(this.stroke, this.capturePoint(event));
 
     try {
       this.canvas.setPointerCapture(event.pointerId);
@@ -842,7 +946,7 @@ export class BezierCanvasBrush {
 
     if (!this.drawing || !this.stroke) return;
     event.preventDefault();
-    if (insertStrokePoint(this.stroke, pointFromEvent(event, this.canvas))) {
+    if (insertStrokePoint(this.stroke, this.capturePoint(event))) {
       this.drawStrokeTail();
     }
   }
@@ -866,7 +970,7 @@ export class BezierCanvasBrush {
     if (this.stroke.points.length === 1) {
       drawStrokeDot(this.ctx, this.stroke.points[0], this.stroke);
     } else if (event && typeof event.clientX === 'number') {
-      finishStrokeModel(this.stroke, pointFromEvent(event, this.canvas));
+      finishStrokeModel(this.stroke, this.capturePoint(event));
       this.drawStrokeTail();
     }
 
@@ -898,18 +1002,31 @@ export class BezierCanvasBrush {
   rememberStroke(stroke) {
     if (!stroke || !stroke.points.length) return;
     const rect = this.canvas.getBoundingClientRect();
+    // Times are rebased to the first sample: width reads only differences, and
+    // an absolute performance.now() would be the largest number in the file.
+    const t0 = stroke.samples.length ? stroke.samples[0].time : 0;
+    const rebase = (sample) => ({ x: sample.x, y: sample.y, time: sample.time - t0 });
     this.history.push({
       id: this.nextOperationId,
       tool: stroke.tool || DEFAULT_STROKE_OPTIONS.tool,
       color: stroke.color || DEFAULT_STROKE_OPTIONS.color,
       maxWidth: stroke.maxWidth,
       minWidth: stroke.minWidth,
+      initialWidth: stroke.initialWidth,
+      endWidth: stroke.endWidth,
+      maxSpeed: stroke.maxSpeed,
+      widthDiffStep: stroke.widthDiffStep,
+      bezierStep: stroke.bezierStep,
       canvasWidth: Math.max(1, rect.width),
       canvasHeight: Math.max(1, rect.height),
+      samples: stroke.samples.map(rebase),
+      end: stroke.end ? rebase(stroke.end) : null,
+      // Derived from everything above, kept for drawing and hit-testing only.
       points: stroke.points.map((point) => ({ x: point.x, y: point.y, w: point.w })),
     });
     this.nextOperationId += 1;
     this.redoStack = [];
+    this.changed();
   }
 
   eraseStrokeAt(point, options = {}) {
@@ -942,6 +1059,7 @@ export class BezierCanvasBrush {
     });
     this.redoStack = [];
     this.redraw();
+    this.changed();
     return true;
   }
 
@@ -956,7 +1074,7 @@ export class BezierCanvasBrush {
       minWidth: operation.minWidth * scale,
       tool: operation.tool,
       color: operation.color,
-      initialWidth: DEFAULT_STROKE_OPTIONS.initialWidth,
+      initialWidth: operation.initialWidth ?? DEFAULT_STROKE_OPTIONS.initialWidth,
     };
     const points = operation.points.map((point) => ({
       x: point.x * scaleX,

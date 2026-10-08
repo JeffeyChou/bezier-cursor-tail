@@ -5,7 +5,9 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/bezier-cursor-tail.js"
+    ".": "./src/bezier-cursor-tail.js",
+    "./stroke-format": "./src/stroke-format.js",
+    "./stroke-format.proto": "./stroke-format.proto"
   },
   "scripts": {
     "serve": "python3 -m http.server 5173 --bind 127.0.0.1",
@@ -19,5 +21,8 @@
     "canvas",
     "svg",
     "pointer"
-  ]
+  ],
+  "devDependencies": {
+    "protobufjs": "^7.6.6"
+  }
 }

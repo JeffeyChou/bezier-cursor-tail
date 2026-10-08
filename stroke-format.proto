@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package bezier_cursor_tail.stroke.v1;
+
+// A drawing, stored as the INPUT SAMPLES of each stroke.
+//
+// Ported from folio's ink format (itself a slimmed-down Wacom WILL 3.0):
+// quantized integer channels, delta encoding, zigzag, varints, and a curve
+// whose inputs are what gets persisted rather than the polyline sampled from
+// them. The midpoint quadratic bezier and its widths are rebuilt by
+// `replayStroke` at load time, bit for bit.
+//
+// One deliberate difference from folio: there IS a time channel. This brush
+// derives width from speed as distance / elapsed milliseconds, so time is a
+// real input here, not a fabricated one. There is still no pressure, tilt or
+// azimuth: the input is a mouse.
+//
+// The bytes are produced by a hand-written encoder, not by protoc. It writes
+// wire types 0 and 2, plus 1 for the two doubles in CanvasAnchor. This file is
+// the contract that makes them readable by anything else, and
+// tests/conformance.test.mjs keeps it honest by parsing the hand-written output
+// with protobufjs against this schema, and vice versa. If that test is ever
+// deleted, delete this file with it.
+
+// The canvas a stroke was captured on, in CSS pixels. Strokes are stretched to
+// the current canvas on redraw, so this is what makes a stroke resize-correct.
+//
+// double, not a quantized integer: this is the denominator of the redraw scale,
+// and layout widths are not on any decimal grid (Chromium reports 1/64 px,
+// Firefox 1/60). Snapping it made the redraw scale 0.99998 instead of 1 and
+// visibly shifted every stroke on undo. Shared through Drawing.anchors, so the
+// 18 bytes are paid once per canvas size, not once per stroke.
+message CanvasAnchor {
+  double width  = 1;
+  double height = 2;
+}
+
+// The width rule: createStrokeModel's options, stored per stroke so that later
+// tuning of the defaults does not retroactively change saved drawings.
+//
+// Every value is x 1000. The sampling thresholds (minSampleMs,
+// minSampleDistance) are absent on purpose: every stored sample already passed
+// them, and replay runs with them at zero.
+message Brush {
+  uint32 id                = 1;  // 0 = MIDPOINT_QUADRATIC_SPEED_V1
+  uint32 max_width_m       = 2;  // px
+  uint32 min_width_m       = 3;  // px
+  uint32 initial_width_m   = 4;  // 0..1, fraction of the width range
+  uint32 end_width_m       = 5;  // 0..1
+  uint32 max_speed_m       = 6;  // px per ms
+  uint32 width_diff_step_m = 7;
+  uint32 bezier_step_m     = 8;
+}
+
+// Everything about a stroke except its geometry. Shared through
+// Drawing.styles: these are identical for nearly every stroke, and repeating
+// them cost 45 of a stroke's 55 fixed bytes.
+message Style {
+  enum Tool { TOOL_PEN = 0; TOOL_ERASER = 1; }
+
+  Tool   tool  = 1;
+  string color = 2;  // any CSS color, as the brush was given it
+  Brush  brush = 3;
+}
+
+message Stroke {
+  // Indices into Drawing.styles and Drawing.anchors. Zero, the common case, is
+  // proto3's default and is not written at all.
+  uint32 style  = 1;
+  uint32 anchor = 2;
+
+  // Interleaved, delta-encoded, zigzagged, varint-packed:
+  //   zz(x0), zz(y0), zz(x1-x0), zz(y1-y0), ...
+  // Units are CSS px x quant. Interleaved because dx and dy of one sample are
+  // correlated in magnitude, so they share a varint length class.
+  bytes xy = 3;
+
+  // zz(t0), zz(t1-t0), ... in whole milliseconds, rebased so t0 is 0.
+  // Zigzagged although time is monotonic in practice: Date.now() and
+  // event.timeStamp can be mixed, and a negative delta must not be unencodable.
+  bytes t = 4;
+
+  // Redundant with xy and t, and present anyway: it sizes the decoder's array
+  // once, and it turns a truncated blob into an error instead of a short stroke
+  // that renders as a plausible-looking wrong drawing.
+  uint32 point_count = 5;
+
+  // True when the LAST point is the pointer-up position, fed to
+  // finishStrokeModel to taper the tail rather than inserted as a sample.
+  bool tapered = 6;
+}
+
+message Drawing {
+  uint32 format_version         = 1;  // 1
+  uint32 quant                  = 2;  // integer units per CSS px (10)
+  repeated Stroke strokes       = 3;  // paint order; erasers composite over what precedes them
+  repeated Style styles         = 4;  // deduplicated; written before the strokes
+  repeated CanvasAnchor anchors = 5;  // deduplicated; written before the strokes
+}

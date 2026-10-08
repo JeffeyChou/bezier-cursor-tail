@@ -78,6 +78,23 @@ const tail = new BezierCursorTail({
 
 `BezierCanvasBrush` handles pointer events, high-DPI canvas sizing, undo, redo, clear, pixel erasing, whole-curve erasing, and responsive redraws.
 
+## Save And Load Drawings
+
+```js
+import { decodeDrawing, encodeDrawing, bytesToBase64, base64ToBytes } from './src/stroke-format.js';
+
+const bytes = encodeDrawing(brush.snapshot()); // Uint8Array
+localStorage.setItem('drawing', bytesToBase64(bytes));
+
+brush.load(decodeDrawing(base64ToBytes(localStorage.getItem('drawing'))));
+```
+
+A drawing is saved as each stroke's pointer samples plus its brush rule. The curve is rebuilt on load, bit for bit. That makes it about 150× smaller than the polyline history, at under 4 bytes per sample. The format is a hand-written proto3 encoding. It is ported from folio's ink format and described in [`docs/STROKE-FORMAT.md`](./docs/STROKE-FORMAT.md), with the schema in [`stroke-format.proto`](./stroke-format.proto). The demo autosaves to `localStorage` and has Save/Open buttons for `.bcts` files.
+
+Pass `onChange` to `BezierCanvasBrush` to be notified after every stroke, erase, undo, redo, clear, or load.
+
+`npm test` needs `npm install` first: the schema conformance test uses protobufjs as a dev dependency.
+
 Set the canvas brush tool to:
 
 - `pen`: draw a new variable-width stroke.
@@ -96,7 +113,9 @@ Set the canvas brush tool to:
 - `findStrokeOperationIndex(operations, point, options)`: hit-tests rendered stroke operations for whole-curve erasing.
 - `getRenderableOperations(history)`: resolves draw and whole-curve erase actions into visible stroke operations.
 - `drawStrokePoints(ctx, points, model, startIndex)`: renders generated points to canvas.
-- `BezierCanvasBrush`: ready-to-use handwriting canvas controller with undo/redo, pixel erasing, and whole-curve erasing.
+- `replayStroke(stroke)`: rebuilds a stroke model from saved samples, end point, and brush options.
+- `BezierCanvasBrush`: ready-to-use handwriting canvas controller with undo/redo, pixel erasing, whole-curve erasing, `snapshot()`, and `load(strokes)`.
+- `encodeDrawing(strokes)` / `decodeDrawing(bytes)` in `src/stroke-format.js`: the binary stroke format.
 - `BezierCursorTail`: ready-to-use SVG cursor tail controller.
 
 The demo binds `Ctrl+Z` and `Cmd+Z` to `brush.undo()`.
