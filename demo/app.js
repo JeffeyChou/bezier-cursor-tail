@@ -3,7 +3,9 @@ import {
   base64ToBytes,
   bytesToBase64,
   decodeDrawing,
+  deflateDrawing,
   encodeDrawing,
+  inflateDrawing,
 } from '../src/stroke-format.js';
 
 const STORAGE_KEY = 'bezier-cursor-tail:drawing';
@@ -112,8 +114,14 @@ function formatBytes(bytes) {
  * Autosave on every change, and show what the drawing costs next to what the
  * old history format (the expanded polyline, a width per point, as JSON) would.
  */
-function persist() {
-  const bytes = encodeDrawing(brush.snapshot());
+let persistGeneration = 0;
+
+async function persist() {
+  // Compression is async, so a quick undo can finish before the stroke that
+  // preceded it. Only the newest call gets to write.
+  const generation = ++persistGeneration;
+  const bytes = await deflateDrawing(encodeDrawing(brush.snapshot()));
+  if (generation !== persistGeneration) return;
   try {
     localStorage.setItem(STORAGE_KEY, bytesToBase64(bytes));
   } catch (err) {
@@ -130,17 +138,19 @@ function persist() {
     + ` · ${formatBytes(polyline)} as polyline JSON`;
 }
 
-function restore() {
+async function restore() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) brush.load(decodeDrawing(base64ToBytes(saved)));
+    if (saved) brush.load(decodeDrawing(await inflateDrawing(base64ToBytes(saved))));
+    syncToolbar();
   } catch (err) {
     storageMeter.textContent = `Could not restore the saved drawing (${err.message})`;
   }
 }
 
-saveButton.addEventListener('click', () => {
-  const blob = new Blob([encodeDrawing(brush.snapshot())], { type: 'application/octet-stream' });
+saveButton.addEventListener('click', async () => {
+  const bytes = await deflateDrawing(encodeDrawing(brush.snapshot()));
+  const blob = new Blob([bytes], { type: 'application/octet-stream' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
   link.download = 'drawing.bcts';
@@ -155,7 +165,7 @@ fileInput.addEventListener('change', async () => {
   fileInput.value = '';
   if (!file) return;
   try {
-    brush.load(decodeDrawing(new Uint8Array(await file.arrayBuffer())));
+    brush.load(decodeDrawing(await inflateDrawing(new Uint8Array(await file.arrayBuffer()))));
     syncToolbar();
   } catch (err) {
     storageMeter.textContent = `Could not open ${file.name} (${err.message})`;

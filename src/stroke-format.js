@@ -19,6 +19,9 @@ const MAGIC = Uint8Array.from([0x42, 0x43, 0x54, 0x53]);
 const ENVELOPE_BYTES = 8;
 
 export const STROKE_CONTAINER_VERSION = 1;
+
+/** Envelope flag: the body after the 8-byte envelope is deflate-raw. */
+const FLAG_DEFLATE = 1;
 export const STROKE_FORMAT_VERSION = 1;
 
 /** Integer units per CSS px: the grid `pointFromEvent` already captures on. */
@@ -46,7 +49,7 @@ const TOOL_CODE = { pen: 0, eraser: 1 };
  * than "bad input":
  * bad-magic | unsupported-container | unsupported-format | truncated |
  * overlong-varint | bad-wire-type | point-count-mismatch | quant-zero |
- * bad-reference
+ * bad-reference | compressed | bad-compression
  */
 export class StrokeDecodeError extends Error {
   constructor(reason, detail) {
@@ -280,7 +283,7 @@ export function encodeDrawing(strokes, { quant = STROKE_QUANT } = {}) {
   const out = new ByteWriter();
   out.raw(MAGIC);
   out.u8(STROKE_CONTAINER_VERSION);
-  out.u8(0); // flags; bit 0 reserved for a future compression scheme
+  out.u8(0); // flags; see FLAG_DEFLATE
   out.u8(0);
   out.u8(0);
   out.raw(body.bytes());
@@ -329,12 +332,8 @@ function anchorBytes(stroke) {
 
 /** The inverse of `encodeDrawing`: plain stroke data, ready for `BezierCanvasBrush#load()`. */
 export function decodeDrawing(bytes) {
-  if (bytes.length < ENVELOPE_BYTES) throw new StrokeDecodeError('truncated', 'shorter than the envelope');
-  for (let i = 0; i < MAGIC.length; i += 1) {
-    if (bytes[i] !== MAGIC[i]) throw new StrokeDecodeError('bad-magic');
-  }
-  if (bytes[4] !== STROKE_CONTAINER_VERSION) {
-    throw new StrokeDecodeError('unsupported-container', `container version ${bytes[4]}`);
+  if (readEnvelope(bytes) & FLAG_DEFLATE) {
+    throw new StrokeDecodeError('compressed', 'pass it through inflateDrawing first');
   }
 
   let formatVersion = 0;
@@ -504,6 +503,77 @@ function undelta(bytes, count, lanes, scale) {
     throw new StrokeDecodeError('point-count-mismatch', `${reader.remaining} trailing byte(s)`);
   }
   return out;
+}
+
+/** Check the envelope and return its flags byte. */
+function readEnvelope(bytes) {
+  if (bytes.length < ENVELOPE_BYTES) throw new StrokeDecodeError('truncated', 'shorter than the envelope');
+  for (let i = 0; i < MAGIC.length; i += 1) {
+    if (bytes[i] !== MAGIC[i]) throw new StrokeDecodeError('bad-magic');
+  }
+  if (bytes[4] !== STROKE_CONTAINER_VERSION) {
+    throw new StrokeDecodeError('unsupported-container', `container version ${bytes[4]}`);
+  }
+  // A flag this build does not know changes how the body must be read, so it
+  // cannot be skipped the way an unknown field can.
+  if (bytes[5] & ~FLAG_DEFLATE) {
+    throw new StrokeDecodeError('unsupported-container', `flags ${bytes[5]}`);
+  }
+  return bytes[5];
+}
+
+/* ---------------------------- compression ---------------------------- */
+
+/**
+ * Deflate a container's body and set FLAG_DEFLATE. Varints spend at least a
+ * byte per value, and most values here (time deltas, small dx/dy) come from a
+ * handful of distinct bytes, which Huffman coding packs into a few bits each.
+ *
+ * Container in, container out, so `encodeDrawing` and `decodeDrawing` stay
+ * synchronous; only this step is async, because CompressionStream is. It is
+ * the same API in browsers and in Node, so there is still one code path.
+ *
+ * Returns the input unchanged when deflate would not make it smaller, which
+ * is the case for a drawing of a stroke or two.
+ *
+ * Unlike the inner container, these bytes are not canonical: two deflate
+ * implementations may compress the same body differently. Compare drawings by
+ * their inflated bytes.
+ */
+export async function deflateDrawing(bytes) {
+  const flags = readEnvelope(bytes);
+  if (flags & FLAG_DEFLATE) return bytes;
+  const body = await transform(bytes.subarray(ENVELOPE_BYTES), new CompressionStream('deflate-raw'));
+  if (body.length >= bytes.length - ENVELOPE_BYTES) return bytes;
+
+  const out = new Uint8Array(ENVELOPE_BYTES + body.length);
+  out.set(bytes.subarray(0, ENVELOPE_BYTES));
+  out[5] = flags | FLAG_DEFLATE;
+  out.set(body, ENVELOPE_BYTES);
+  return out;
+}
+
+/** The inverse of `deflateDrawing`. An uncompressed container passes through. */
+export async function inflateDrawing(bytes) {
+  const flags = readEnvelope(bytes);
+  if (!(flags & FLAG_DEFLATE)) return bytes;
+  let body;
+  try {
+    body = await transform(bytes.subarray(ENVELOPE_BYTES), new DecompressionStream('deflate-raw'));
+  } catch (error) {
+    throw new StrokeDecodeError('bad-compression', error.message);
+  }
+
+  const out = new Uint8Array(ENVELOPE_BYTES + body.length);
+  out.set(bytes.subarray(0, ENVELOPE_BYTES));
+  out[5] = flags & ~FLAG_DEFLATE;
+  out.set(body, ENVELOPE_BYTES);
+  return out;
+}
+
+async function transform(bytes, stream) {
+  const response = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 /* ------------------------------ base64 ------------------------------ */

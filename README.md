@@ -81,15 +81,18 @@ const tail = new BezierCursorTail({
 ## Save And Load Drawings
 
 ```js
-import { decodeDrawing, encodeDrawing, bytesToBase64, base64ToBytes } from './src/stroke-format.js';
+import {
+  decodeDrawing, encodeDrawing, deflateDrawing, inflateDrawing, bytesToBase64, base64ToBytes,
+} from './src/stroke-format.js';
 
-const bytes = encodeDrawing(brush.snapshot()); // Uint8Array
+const bytes = await deflateDrawing(encodeDrawing(brush.snapshot())); // Uint8Array
 localStorage.setItem('drawing', bytesToBase64(bytes));
 
-brush.load(decodeDrawing(base64ToBytes(localStorage.getItem('drawing'))));
+const saved = base64ToBytes(localStorage.getItem('drawing'));
+brush.load(decodeDrawing(await inflateDrawing(saved)));
 ```
 
-A drawing is saved as each stroke's pointer samples plus its brush rule. The curve is rebuilt on load, bit for bit. That makes it about 150× smaller than the polyline history, at under 4 bytes per sample. The format is a hand-written proto3 encoding. It is ported from folio's ink format and described in [`docs/STROKE-FORMAT.md`](./docs/STROKE-FORMAT.md), with the schema in [`stroke-format.proto`](./stroke-format.proto). The demo autosaves to `localStorage` and has Save/Open buttons for `.bcts` files.
+A drawing is saved as each stroke's pointer samples plus its brush rule. The curve is rebuilt on load, bit for bit. That makes it about 150× smaller than the polyline history, at under 4 bytes per sample. The optional deflate step saves roughly a further 20–50%. The format is a hand-written proto3 encoding. It is ported from folio's ink format and described in [`docs/STROKE-FORMAT.md`](./docs/STROKE-FORMAT.md), with the schema in [`stroke-format.proto`](./stroke-format.proto). The demo autosaves to `localStorage` and has Save/Open buttons for `.bcts` files.
 
 Pass `onChange` to `BezierCanvasBrush` to be notified after every stroke, erase, undo, redo, clear, or load.
 
@@ -116,6 +119,7 @@ Set the canvas brush tool to:
 - `replayStroke(stroke)`: rebuilds a stroke model from saved samples, end point, and brush options.
 - `BezierCanvasBrush`: ready-to-use handwriting canvas controller with undo/redo, pixel erasing, whole-curve erasing, `snapshot()`, and `load(strokes)`.
 - `encodeDrawing(strokes)` / `decodeDrawing(bytes)` in `src/stroke-format.js`: the binary stroke format.
+- `deflateDrawing(bytes)` / `inflateDrawing(bytes)`: optional async compression of an encoded drawing.
 - `BezierCursorTail`: ready-to-use SVG cursor tail controller.
 
 The demo binds `Ctrl+Z` and `Cmd+Z` to `brush.undo()`.

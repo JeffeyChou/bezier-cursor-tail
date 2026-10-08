@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { inflateRawSync } from 'node:zlib';
 import protobuf from 'protobufjs';
 import { BezierCanvasBrush } from '../src/bezier-cursor-tail.js';
 import {
@@ -17,6 +18,7 @@ import {
   STROKE_FORMAT_VERSION,
   STROKE_QUANT,
   decodeDrawing,
+  deflateDrawing,
   encodeDrawing,
 } from '../src/stroke-format.js';
 import { draw, fakeCanvas, strokeEvents } from './helpers.mjs';
@@ -85,4 +87,14 @@ test('a stroke pointing past the tables fails as a bad reference', () => {
     () => decodeDrawing(withEnvelope),
     (error) => error instanceof StrokeDecodeError && error.reason === 'bad-reference',
   );
+});
+
+test('a compressed body is plain deflate-raw around the same message', async () => {
+  const plain = encodeDrawing(snapshot);
+  const packed = await deflateDrawing(plain);
+  // Inflated by zlib rather than by our own inflateDrawing, so another
+  // language only needs a stock deflate library to read these files.
+  const body = inflateRawSync(packed.subarray(ENVELOPE_BYTES));
+  assert.deepEqual(new Uint8Array(body), plain.subarray(ENVELOPE_BYTES));
+  assert.equal(Drawing.decode(body).strokes.length, 2);
 });

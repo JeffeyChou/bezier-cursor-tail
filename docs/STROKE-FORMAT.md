@@ -37,7 +37,28 @@ How a drawing is saved, ported from folio's ink format (`docs/INK.md` there).
 - Schema: `stroke-format.proto`. The encoder is hand-written in
   `src/stroke-format.js`, with no dependencies.
 - An 8-byte envelope starts with the magic bytes `BCTS` plus a container
-  version, so a blob can be identified from a hexdump.
+  version, so a blob can be identified from a hexdump. Byte 5 holds flags.
+
+## Compression
+
+- `deflateDrawing` deflates the body after the envelope and sets flag bit 0;
+  `inflateDrawing` reverses it, and passes uncompressed containers through.
+- **Why it helps:** a varint spends at least one byte per value, but most values
+  here (time deltas of 14–19 ms, small dx/dy) come from a handful of distinct
+  bytes. Huffman coding packs them into a few bits each.
+- On the 20-stroke fixture, deflate takes **5,278 B down to 4,350 B (−18%)**.
+  Short, regular strokes compress better: a 5-stroke demo drawing went from
+  724 B to 363 B.
+- It is container in, container out, so `encodeDrawing`/`decodeDrawing` stay
+  synchronous. Only this step is async, because `CompressionStream` is. Browsers
+  and Node share that API, so there is still one code path.
+- If deflate would not make the file smaller, the plain container is kept.
+- `decodeDrawing` on a compressed container fails as `compressed`, and an
+  unknown flag bit fails as `unsupported-container`.
+- **Compressed bytes are not canonical.** Two deflate implementations may emit
+  different bytes for the same body. Byte-identity holds for the inflated
+  container. The body is plain deflate-raw, so another language needs only a
+  stock zlib to read it (tested with Node's `zlib`).
 - `tests/conformance.test.mjs` checks the bytes in both directions with
   protobufjs. **If that test is ever deleted, delete the `.proto` with it.**
 
@@ -66,7 +87,7 @@ How a drawing is saved, ported from folio's ink format (`docs/INK.md` there).
 - In a real browser, live drawing, redraw after undo/redo, and reload from
   storage give pixel-identical canvases.
 - Bad input fails with a named reason (`bad-magic`, `truncated`,
-  `point-count-mismatch`, `bad-reference`, …) instead of drawing something plausible but wrong.
+  `point-count-mismatch`, `bad-reference`, `bad-compression`, …) instead of drawing something plausible but wrong.
 - Unknown field numbers are skipped, so newer files still load in older builds.
 
 ## What is not stored

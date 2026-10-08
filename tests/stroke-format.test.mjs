@@ -13,7 +13,9 @@ import {
   base64ToBytes,
   bytesToBase64,
   decodeDrawing,
+  deflateDrawing,
   encodeDrawing,
+  inflateDrawing,
 } from '../src/stroke-format.js';
 import { draw, fakeCanvas, strokeEvents } from './helpers.mjs';
 
@@ -176,4 +178,39 @@ test('a drawing costs a small fraction of its JSON history', () => {
 
   assert.ok(bytes * 100 < legacy, `${bytes} B vs ${legacy} B of JSON`);
   assert.ok(bytes / samples < 5, `${(bytes / samples).toFixed(2)} B per sample`);
+});
+
+test('deflate round-trips to the exact uncompressed container', async () => {
+  const bytes = encodeDrawing(drawing({ strokes: 20, seed: 100 }).snapshot());
+  const packed = await deflateDrawing(bytes);
+
+  assert.equal(packed[5] & 1, 1, 'FLAG_DEFLATE is set');
+  assert.ok(packed.length < bytes.length * 0.9, `${packed.length} B vs ${bytes.length} B`);
+  assert.deepEqual(await inflateDrawing(packed), bytes);
+  assert.deepEqual(await deflateDrawing(packed), packed, 'deflating twice is a no-op');
+});
+
+test('an uncompressed container passes through inflate', async () => {
+  const bytes = encodeDrawing(drawing({ strokes: 2 }).snapshot());
+  assert.equal(await inflateDrawing(bytes), bytes);
+});
+
+test('deflate keeps the plain container when it would not be smaller', async () => {
+  const bytes = encodeDrawing([]);
+  assert.equal(await deflateDrawing(bytes), bytes);
+});
+
+test('compressed input fails by name rather than as garbage', async () => {
+  const packed = await deflateDrawing(encodeDrawing(drawing({ strokes: 4 }).snapshot()));
+  assert.equal(reasonOf(() => decodeDrawing(packed)), 'compressed');
+
+  const corrupt = packed.slice(0, 8 + 10);
+  await assert.rejects(
+    inflateDrawing(corrupt),
+    (error) => error instanceof StrokeDecodeError && error.reason === 'bad-compression',
+  );
+
+  const unknownFlag = encodeDrawing([]);
+  unknownFlag[5] = 2;
+  assert.equal(reasonOf(() => decodeDrawing(unknownFlag)), 'unsupported-container');
 });
